@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = "8407027369:AAFKyTJ7JC6W8Hx3JdB1DznPg3uCWgQO1qE"  # Token do @BotFather
 TMDB_API_KEY = "5c1ec82567d7036856c4e09aa60c8278"
 CHANNEL_ID = "-1003262670465"  # Seu canal UltraPlay
+TOPIC_ID = 9  # ID do tópico "Novidades VOD"
 ADMIN_IDS = [7937632147]  # Lista de IDs de admin que podem usar o bot (ex: [123456789, 987654321])
 # =========================================
 
@@ -246,19 +247,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         imagem_url = None
     
     try:
-        # Posta no canal
+        # Posta no canal no tópico específico
         if imagem_url:
             await context.bot.send_photo(
                 chat_id=CHANNEL_ID,
                 photo=imagem_url,
                 caption=mensagem,
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                message_thread_id=TOPIC_ID  # Posta no tópico "Novidades VOD"
             )
         else:
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=mensagem,
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                message_thread_id=TOPIC_ID  # Posta no tópico "Novidades VOD"
             )
         
         titulo = detalhes.get("title") or detalhes.get("name")
@@ -298,6 +301,7 @@ def main():
     # Inicia o bot
     print("🤖 Bot iniciado! Aguardando comandos...")
     print(f"📺 Canal configurado: {CHANNEL_ID}")
+    print(f"📌 Tópico: Novidades VOD (ID: {TOPIC_ID})")
     print(f"🔑 TMDB API: Configurada")
     print("\nPressione Ctrl+C para parar o bot.\n")
     

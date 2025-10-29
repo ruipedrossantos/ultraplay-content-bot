@@ -1,2 +1,13 @@
-python-telegram-bot==20.7
+python-telegram-bot==21.7
 requests==2.31.0
+```
+
+**Adiciona arquivo novo `runtime.txt`:**
+```
+python-3.11.9
+```
+
+**Adiciona arquivo novo `.python-version`:**
+```
+3.11
+```

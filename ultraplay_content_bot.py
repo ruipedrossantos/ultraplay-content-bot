@@ -110,19 +110,19 @@ def formatar_mensagem(detalhes: dict, media_type: str):
         mensagem += f" | 📚 {num_seasons} temporada{'s' if num_seasons > 1 else ''}"
     
     mensagem += f"""
-🌍 Legendas: PT, EN, ES
+🌍 Legendas: PT
 
 📖 <b>Sinopse:</b>
 <i>{sinopse[:250]}{'...' if len(sinopse) > 250 else ''}</i>
 
 ━━━━━━━━━━━━━━━━━━━━
-💎 Qualidade: <b>4K Ultra HD</b>
-🔊 Áudio: <b>Multi-idioma</b>
+💎 Qualidade: <b>Full HD</b>
+🔊 Áudio: <b>Original</b>
 ✅ Disponível: <b>AGORA</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 🔥 <b>ULTRAPLAY</b> | Seu entretenimento premium
-💬 @UltraPlayBot | 🌐 Assine já!"""
+🌐 Assine já!"""
 
     return mensagem
 

@@ -126,6 +126,59 @@ def formatar_mensagem(detalhes: dict, media_type: str):
 
     return mensagem
 
+def formatar_mensagem_atualizacao(detalhes: dict):
+    """Formata a mensagem para anunciar novos episódios"""
+    
+    titulo = detalhes.get("name", "")
+    titulo_original = detalhes.get("original_name", "")
+    data = detalhes.get("first_air_date", "")
+    ano = data.split("-")[0] if data else "N/A"
+    rating = detalhes.get("vote_average", 0)
+    sinopse = detalhes.get("overview", "Sinopse não disponível.")
+    num_seasons = detalhes.get("number_of_seasons", 0)
+    
+    # Gêneros
+    generos = [g["name"] for g in detalhes.get("genres", [])]
+    generos_str = ", ".join(generos[:3]) if generos else "N/A"
+    
+    # Última temporada
+    ultima_temporada = detalhes.get("last_episode_to_air", {})
+    season_number = ultima_temporada.get("season_number", num_seasons)
+    episode_number = ultima_temporada.get("episode_number", "?")
+    
+    # Monta a mensagem
+    mensagem = f"""╔═══════════════════════╗
+║   📺 <b>ULTRAPLAY NEWS</b>   ║
+╚═══════════════════════╝
+
+🆕 <b>NOVOS EPISÓDIOS</b>
+
+━━━━━━━━━━━━━━━━━━━━
+📺 <b>{titulo.upper()}</b>
+━━━━━━━━━━━━━━━━━━━━
+
+⭐ <b>{rating:.1f}</b>/10 | 🎭 {generos_str}
+📅 {ano} | 📚 {num_seasons} temporada{'s' if num_seasons > 1 else ''}
+
+🔥 <b>Novos episódios disponíveis!</b>
+📺 Temporada {season_number}
+
+🌍 Legendas: PT
+
+📖 <b>Sobre a série:</b>
+<i>{sinopse[:200]}{'...' if len(sinopse) > 200 else ''}</i>
+
+━━━━━━━━━━━━━━━━━━━━
+💎 Qualidade: <b>Full HD</b>
+🔊 Áudio: <b>Original</b>
+✅ Disponível: <b>AGORA</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🔥 <b>ULTRAPLAY</b> | Seu entretenimento premium
+🌐 Assine já!"""
+
+    return mensagem
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start"""
     user_id = update.effective_user.id
@@ -140,6 +193,10 @@ Comandos disponíveis:
 
 /adicionar <i>nome do filme ou série</i>
 <b>Exemplo:</b> /adicionar Gladiador 2
+
+/atualizar <i>nome da série</i>
+<b>Exemplo:</b> /atualizar Breaking Bad
+(Para anunciar novos episódios)
 
 O bot vai buscar o conteúdo e você escolhe qual postar no canal!
 
@@ -209,6 +266,62 @@ async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML
     )
 
+async def atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /atualizar para anunciar novos episódios de séries"""
+    user_id = update.effective_user.id
+    
+    # Verifica permissão
+    if ADMIN_IDS and user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
+        return
+    
+    # Verifica se forneceu o nome
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Use: /atualizar <i>nome da série</i>\n\n"
+            "<b>Exemplo:</b> /atualizar Breaking Bad",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    query = " ".join(context.args)
+    await update.message.reply_text(f"🔍 Buscando série: <b>{query}</b>...", parse_mode=ParseMode.HTML)
+    
+    # Busca no TMDB
+    resultados = buscar_conteudo(query)
+    
+    # Filtra apenas séries
+    series = [r for r in resultados if r.get("media_type") == "tv"]
+    
+    if not series:
+        await update.message.reply_text(
+            f"❌ Nenhuma série encontrada para: <b>{query}</b>\n\n"
+            "Tente outro nome ou verifique a ortografia.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # Cria botões com os resultados
+    keyboard = []
+    for resultado in series:
+        media_id = resultado.get("id")
+        titulo = resultado.get("name", "")
+        ano = resultado.get("first_air_date", "")[:4]
+        
+        texto_botao = f"📺 {titulo} ({ano})"
+        callback_data = f"update_{media_id}"
+        
+        keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback_data)])
+    
+    keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "📋 <b>Selecione a série para anunciar novos episódios:</b>",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML
+    )
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle dos botões de seleção"""
     query = update.callback_query
@@ -218,8 +331,65 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Operação cancelada.")
         return
     
-    # Parse do callback_data: post_movie_12345 ou post_tv_67890
+    # Parse do callback_data
     parts = query.data.split("_")
+    
+    # Para comando /atualizar (update_12345)
+    if len(parts) == 2 and parts[0] == "update":
+        media_id = int(parts[1])
+        
+        await query.edit_message_text("⏳ Preparando anúncio de novos episódios...")
+        
+        # Obtém detalhes completos
+        detalhes = obter_detalhes("tv", media_id)
+        
+        if not detalhes:
+            await query.edit_message_text("❌ Erro ao obter detalhes da série.")
+            return
+        
+        # Formata mensagem de atualização
+        mensagem = formatar_mensagem_atualizacao(detalhes)
+        
+        # URL da imagem (poster)
+        poster_path = detalhes.get("poster_path")
+        if poster_path:
+            imagem_url = f"{TMDB_IMAGE_BASE}{poster_path}"
+        else:
+            imagem_url = None
+        
+        try:
+            # Posta no canal no tópico específico
+            if imagem_url:
+                await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=imagem_url,
+                    caption=mensagem,
+                    parse_mode=ParseMode.HTML,
+                    message_thread_id=TOPIC_ID
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=mensagem,
+                    parse_mode=ParseMode.HTML,
+                    message_thread_id=TOPIC_ID
+                )
+            
+            titulo = detalhes.get("name")
+            await query.edit_message_text(
+                f"✅ Atualização de <b>{titulo}</b> foi postada no canal com sucesso! 🎉",
+                parse_mode=ParseMode.HTML
+            )
+            
+        except Exception as e:
+            logger.error(f"Erro ao postar no canal: {e}")
+            await query.edit_message_text(
+                f"❌ Erro ao postar no canal.\n\n"
+                f"Detalhes: {str(e)}"
+            )
+        return
+    
+    # Para comando /adicionar (post_movie_12345 ou post_tv_67890)
     if len(parts) != 3 or parts[0] != "post":
         await query.edit_message_text("❌ Erro ao processar seleção.")
         return
@@ -296,6 +466,7 @@ def main():
     # Adiciona handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("adicionar", adicionar))
+    application.add_handler(CommandHandler("atualizar", atualizar))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Inicia o bot

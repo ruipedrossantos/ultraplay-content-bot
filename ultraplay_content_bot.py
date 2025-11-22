@@ -3,9 +3,12 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
+from telegram.error import NetworkError, TimedOut, TelegramError
 import logging
+import time
+from datetime import datetime
 
-# Configuração de logging
+# Configuração de logging mais detalhada
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -13,18 +16,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===== CONFIGURAÇÕES - PREENCHA AQUI =====
-TELEGRAM_BOT_TOKEN = "8407027369:AAFKyTJ7JC6W8Hx3JdB1DznPg3uCWgQO1qE"  # Token do @BotFather
+TELEGRAM_BOT_TOKEN = "8407027369:AAFKyTJ7JC6W8Hx3JdB1DznPg3uCWgQO1qE"
 TMDB_API_KEY = "5c1ec82567d7036856c4e09aa60c8278"
-CHANNEL_ID = "-1003262670465"  # Seu canal UltraPlay
-TOPIC_ID = 9  # ID do tópico "Novidades VOD"
-ADMIN_IDS = [7937632147]  # Lista de IDs de admin que podem usar o bot (ex: [123456789, 987654321])
+CHANNEL_ID = "-1003262670465"
+TOPIC_ID = 9
+ADMIN_IDS = [7937632147]
 # =========================================
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
 
 def buscar_conteudo(query: str):
-    """Busca filme ou série no TMDB"""
+    """Busca filme ou série no TMDB com retry"""
     url = f"{TMDB_BASE_URL}/search/multi"
     params = {
         "api_key": TMDB_API_KEY,
@@ -33,20 +36,28 @@ def buscar_conteudo(query: str):
         "page": 1
     }
     
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        
-        # Filtra apenas filmes e séries
-        filtered = [r for r in results if r.get("media_type") in ["movie", "tv"]]
-        return filtered[:5]  # Retorna até 5 resultados
-    except Exception as e:
-        logger.error(f"Erro ao buscar conteúdo: {e}")
-        return []
+    max_retries = 3
+    for tentativa in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            results = response.json().get("results", [])
+            
+            filtered = [r for r in results if r.get("media_type") in ["movie", "tv"]]
+            return filtered[:5]
+        except requests.Timeout:
+            logger.warning(f"Timeout na tentativa {tentativa + 1}/{max_retries}")
+            if tentativa < max_retries - 1:
+                time.sleep(2)
+        except Exception as e:
+            logger.error(f"Erro ao buscar conteúdo (tentativa {tentativa + 1}): {e}")
+            if tentativa < max_retries - 1:
+                time.sleep(2)
+    
+    return []
 
 def obter_detalhes(media_type: str, media_id: int):
-    """Obtém detalhes completos do filme ou série"""
+    """Obtém detalhes completos com retry"""
     url = f"{TMDB_BASE_URL}/{media_type}/{media_id}"
     params = {
         "api_key": TMDB_API_KEY,
@@ -54,13 +65,22 @@ def obter_detalhes(media_type: str, media_id: int):
         "append_to_response": "credits"
     }
     
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"Erro ao obter detalhes: {e}")
-        return None
+    max_retries = 3
+    for tentativa in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.Timeout:
+            logger.warning(f"Timeout ao obter detalhes (tentativa {tentativa + 1}/{max_retries})")
+            if tentativa < max_retries - 1:
+                time.sleep(2)
+        except Exception as e:
+            logger.error(f"Erro ao obter detalhes (tentativa {tentativa + 1}): {e}")
+            if tentativa < max_retries - 1:
+                time.sleep(2)
+    
+    return None
 
 def formatar_mensagem(detalhes: dict, media_type: str):
     """Formata a mensagem para postar no canal"""
@@ -72,7 +92,7 @@ def formatar_mensagem(detalhes: dict, media_type: str):
         duracao = detalhes.get("runtime", 0)
         tipo_emoji = "🎬"
         tipo_nome = "FILME"
-    else:  # tv
+    else:
         titulo = detalhes.get("name", "")
         titulo_original = detalhes.get("original_name", "")
         data = detalhes.get("first_air_date", "")
@@ -84,11 +104,9 @@ def formatar_mensagem(detalhes: dict, media_type: str):
     rating = detalhes.get("vote_average", 0)
     sinopse = detalhes.get("overview", "Sinopse não disponível.")
     
-    # Gêneros
     generos = [g["name"] for g in detalhes.get("genres", [])]
     generos_str = ", ".join(generos[:3]) if generos else "N/A"
     
-    # Monta a mensagem
     mensagem = f"""╔═══════════════════════╗
 ║   {tipo_emoji} <b>ULTRAPLAY NEWS</b>   ║
 ╚═══════════════════════╝
@@ -137,16 +155,13 @@ def formatar_mensagem_atualizacao(detalhes: dict):
     sinopse = detalhes.get("overview", "Sinopse não disponível.")
     num_seasons = detalhes.get("number_of_seasons", 0)
     
-    # Gêneros
     generos = [g["name"] for g in detalhes.get("genres", [])]
     generos_str = ", ".join(generos[:3]) if generos else "N/A"
     
-    # Última temporada
     ultima_temporada = detalhes.get("last_episode_to_air", {})
     season_number = ultima_temporada.get("season_number", num_seasons)
     episode_number = ultima_temporada.get("episode_number", "?")
     
-    # Monta a mensagem
     mensagem = f"""╔═══════════════════════╗
 ║   📺 <b>ULTRAPLAY NEWS</b>   ║
 ╚═══════════════════════╝
@@ -181,13 +196,14 @@ def formatar_mensagem_atualizacao(detalhes: dict):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start"""
-    user_id = update.effective_user.id
-    
-    if ADMIN_IDS and user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Você não tem permissão para usar este bot.")
-        return
-    
-    mensagem = """🎬 <b>Bot de Conteúdo UltraPlay</b>
+    try:
+        user_id = update.effective_user.id
+        
+        if ADMIN_IDS and user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Você não tem permissão para usar este bot.")
+            return
+        
+        mensagem = """🎬 <b>Bot de Conteúdo UltraPlay</b>
 
 Comandos disponíveis:
 
@@ -202,155 +218,211 @@ O bot vai buscar o conteúdo e você escolhe qual postar no canal!
 
 ━━━━━━━━━━━━━━━━━━━━
 🔥 <b>ULTRAPLAY</b> - Gestão de Conteúdo"""
-    
-    await update.message.reply_text(mensagem, parse_mode=ParseMode.HTML)
+        
+        await update.message.reply_text(mensagem, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Erro no comando start: {e}")
 
 async def adicionar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /adicionar para buscar e postar conteúdo"""
-    user_id = update.effective_user.id
-    
-    # Verifica permissão
-    if ADMIN_IDS and user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
-        return
-    
-    # Verifica se forneceu o nome
-    if not context.args:
+    try:
+        user_id = update.effective_user.id
+        
+        if ADMIN_IDS and user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Use: /adicionar <i>nome do filme ou série</i>\n\n"
+                "<b>Exemplo:</b> /adicionar Gladiador 2",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        query = " ".join(context.args)
+        await update.message.reply_text(f"🔍 Buscando: <b>{query}</b>...", parse_mode=ParseMode.HTML)
+        
+        resultados = buscar_conteudo(query)
+        
+        if not resultados:
+            await update.message.reply_text(
+                f"❌ Nenhum resultado encontrado para: <b>{query}</b>\n\n"
+                "Tente outro nome ou verifique a ortografia.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        keyboard = []
+        for resultado in resultados:
+            media_type = resultado.get("media_type")
+            media_id = resultado.get("id")
+            
+            if media_type == "movie":
+                titulo = resultado.get("title", "")
+                ano = resultado.get("release_date", "")[:4]
+                emoji = "🎬"
+            else:
+                titulo = resultado.get("name", "")
+                ano = resultado.get("first_air_date", "")[:4]
+                emoji = "📺"
+            
+            texto_botao = f"{emoji} {titulo} ({ano})"
+            callback_data = f"post_{media_type}_{media_id}"
+            
+            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback_data)])
+        
+        keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "❌ Use: /adicionar <i>nome do filme ou série</i>\n\n"
-            "<b>Exemplo:</b> /adicionar Gladiador 2",
+            "📋 <b>Selecione o conteúdo para postar:</b>",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
-        return
-    
-    query = " ".join(context.args)
-    await update.message.reply_text(f"🔍 Buscando: <b>{query}</b>...", parse_mode=ParseMode.HTML)
-    
-    # Busca no TMDB
-    resultados = buscar_conteudo(query)
-    
-    if not resultados:
-        await update.message.reply_text(
-            f"❌ Nenhum resultado encontrado para: <b>{query}</b>\n\n"
-            "Tente outro nome ou verifique a ortografia.",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    # Cria botões com os resultados
-    keyboard = []
-    for resultado in resultados:
-        media_type = resultado.get("media_type")
-        media_id = resultado.get("id")
-        
-        if media_type == "movie":
-            titulo = resultado.get("title", "")
-            ano = resultado.get("release_date", "")[:4]
-            emoji = "🎬"
-        else:  # tv
-            titulo = resultado.get("name", "")
-            ano = resultado.get("first_air_date", "")[:4]
-            emoji = "📺"
-        
-        texto_botao = f"{emoji} {titulo} ({ano})"
-        callback_data = f"post_{media_type}_{media_id}"
-        
-        keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback_data)])
-    
-    keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "📋 <b>Selecione o conteúdo para postar:</b>",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.HTML
-    )
+    except Exception as e:
+        logger.error(f"Erro no comando adicionar: {e}")
+        try:
+            await update.message.reply_text("❌ Erro ao processar comando. Tente novamente.")
+        except:
+            pass
 
 async def atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /atualizar para anunciar novos episódios de séries"""
-    user_id = update.effective_user.id
-    
-    # Verifica permissão
-    if ADMIN_IDS and user_id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
-        return
-    
-    # Verifica se forneceu o nome
-    if not context.args:
+    try:
+        user_id = update.effective_user.id
+        
+        if ADMIN_IDS and user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Você não tem permissão para usar este comando.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Use: /atualizar <i>nome da série</i>\n\n"
+                "<b>Exemplo:</b> /atualizar Breaking Bad",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        query = " ".join(context.args)
+        await update.message.reply_text(f"🔍 Buscando série: <b>{query}</b>...", parse_mode=ParseMode.HTML)
+        
+        resultados = buscar_conteudo(query)
+        series = [r for r in resultados if r.get("media_type") == "tv"]
+        
+        if not series:
+            await update.message.reply_text(
+                f"❌ Nenhuma série encontrada para: <b>{query}</b>\n\n"
+                "Tente outro nome ou verifique a ortografia.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        keyboard = []
+        for resultado in series:
+            media_id = resultado.get("id")
+            titulo = resultado.get("name", "")
+            ano = resultado.get("first_air_date", "")[:4]
+            
+            texto_botao = f"📺 {titulo} ({ano})"
+            callback_data = f"update_{media_id}"
+            
+            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback_data)])
+        
+        keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "❌ Use: /atualizar <i>nome da série</i>\n\n"
-            "<b>Exemplo:</b> /atualizar Breaking Bad",
+            "📋 <b>Selecione a série para anunciar novos episódios:</b>",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
-        return
-    
-    query = " ".join(context.args)
-    await update.message.reply_text(f"🔍 Buscando série: <b>{query}</b>...", parse_mode=ParseMode.HTML)
-    
-    # Busca no TMDB
-    resultados = buscar_conteudo(query)
-    
-    # Filtra apenas séries
-    series = [r for r in resultados if r.get("media_type") == "tv"]
-    
-    if not series:
-        await update.message.reply_text(
-            f"❌ Nenhuma série encontrada para: <b>{query}</b>\n\n"
-            "Tente outro nome ou verifique a ortografia.",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    # Cria botões com os resultados
-    keyboard = []
-    for resultado in series:
-        media_id = resultado.get("id")
-        titulo = resultado.get("name", "")
-        ano = resultado.get("first_air_date", "")[:4]
-        
-        texto_botao = f"📺 {titulo} ({ano})"
-        callback_data = f"update_{media_id}"
-        
-        keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback_data)])
-    
-    keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancelar")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "📋 <b>Selecione a série para anunciar novos episódios:</b>",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.HTML
-    )
+    except Exception as e:
+        logger.error(f"Erro no comando atualizar: {e}")
+        try:
+            await update.message.reply_text("❌ Erro ao processar comando. Tente novamente.")
+        except:
+            pass
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle dos botões de seleção"""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "cancelar":
-        await query.edit_message_text("❌ Operação cancelada.")
-        return
-    
-    # Parse do callback_data
-    parts = query.data.split("_")
-    
-    # Para comando /atualizar (update_12345)
-    if len(parts) == 2 and parts[0] == "update":
-        media_id = int(parts[1])
+    try:
+        query = update.callback_query
+        await query.answer()
         
-        await query.edit_message_text("⏳ Preparando anúncio de novos episódios...")
-        
-        # Obtém detalhes completos
-        detalhes = obter_detalhes("tv", media_id)
-        
-        if not detalhes:
-            await query.edit_message_text("❌ Erro ao obter detalhes da série.")
+        if query.data == "cancelar":
+            await query.edit_message_text("❌ Operação cancelada.")
             return
         
-        # Formata mensagem de atualização
-        mensagem = formatar_mensagem_atualizacao(detalhes)
+        parts = query.data.split("_")
         
-        # URL da imagem (poster)
+        if len(parts) == 2 and parts[0] == "update":
+            media_id = int(parts[1])
+            
+            await query.edit_message_text("⏳ Preparando anúncio de novos episódios...")
+            
+            detalhes = obter_detalhes("tv", media_id)
+            
+            if not detalhes:
+                await query.edit_message_text("❌ Erro ao obter detalhes da série.")
+                return
+            
+            mensagem = formatar_mensagem_atualizacao(detalhes)
+            
+            poster_path = detalhes.get("poster_path")
+            if poster_path:
+                imagem_url = f"{TMDB_IMAGE_BASE}{poster_path}"
+            else:
+                imagem_url = None
+            
+            try:
+                if imagem_url:
+                    await context.bot.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=imagem_url,
+                        caption=mensagem,
+                        parse_mode=ParseMode.HTML,
+                        message_thread_id=TOPIC_ID
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=mensagem,
+                        parse_mode=ParseMode.HTML,
+                        message_thread_id=TOPIC_ID
+                    )
+                
+                titulo = detalhes.get("name")
+                await query.edit_message_text(
+                    f"✅ Atualização de <b>{titulo}</b> foi postada no canal com sucesso! 🎉",
+                    parse_mode=ParseMode.HTML
+                )
+                
+            except Exception as e:
+                logger.error(f"Erro ao postar no canal: {e}")
+                await query.edit_message_text(
+                    f"❌ Erro ao postar no canal.\n\n"
+                    f"Detalhes: {str(e)}"
+                )
+            return
+        
+        if len(parts) != 3 or parts[0] != "post":
+            await query.edit_message_text("❌ Erro ao processar seleção.")
+            return
+        
+        media_type = parts[1]
+        media_id = int(parts[2])
+        
+        await query.edit_message_text("⏳ Preparando publicação...")
+        
+        detalhes = obter_detalhes(media_type, media_id)
+        
+        if not detalhes:
+            await query.edit_message_text("❌ Erro ao obter detalhes do conteúdo.")
+            return
+        
+        mensagem = formatar_mensagem(detalhes, media_type)
+        
         poster_path = detalhes.get("poster_path")
         if poster_path:
             imagem_url = f"{TMDB_IMAGE_BASE}{poster_path}"
@@ -358,7 +430,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             imagem_url = None
         
         try:
-            # Posta no canal no tópico específico
             if imagem_url:
                 await context.bot.send_photo(
                     chat_id=CHANNEL_ID,
@@ -375,9 +446,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     message_thread_id=TOPIC_ID
                 )
             
-            titulo = detalhes.get("name")
+            titulo = detalhes.get("title") or detalhes.get("name")
             await query.edit_message_text(
-                f"✅ Atualização de <b>{titulo}</b> foi postada no canal com sucesso! 🎉",
+                f"✅ <b>{titulo}</b> foi postado no canal com sucesso! 🎉",
                 parse_mode=ParseMode.HTML
             )
             
@@ -387,70 +458,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Erro ao postar no canal.\n\n"
                 f"Detalhes: {str(e)}"
             )
-        return
-    
-    # Para comando /adicionar (post_movie_12345 ou post_tv_67890)
-    if len(parts) != 3 or parts[0] != "post":
-        await query.edit_message_text("❌ Erro ao processar seleção.")
-        return
-    
-    media_type = parts[1]
-    media_id = int(parts[2])
-    
-    await query.edit_message_text("⏳ Preparando publicação...")
-    
-    # Obtém detalhes completos
-    detalhes = obter_detalhes(media_type, media_id)
-    
-    if not detalhes:
-        await query.edit_message_text("❌ Erro ao obter detalhes do conteúdo.")
-        return
-    
-    # Formata mensagem
-    mensagem = formatar_mensagem(detalhes, media_type)
-    
-    # URL da imagem (poster)
-    poster_path = detalhes.get("poster_path")
-    if poster_path:
-        imagem_url = f"{TMDB_IMAGE_BASE}{poster_path}"
-    else:
-        imagem_url = None
+    except Exception as e:
+        logger.error(f"Erro no button_callback: {e}")
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Handler global de erros"""
+    logger.error(f"Exception while handling an update: {context.error}")
     
     try:
-        # Posta no canal no tópico específico
-        if imagem_url:
-            await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=imagem_url,
-                caption=mensagem,
-                parse_mode=ParseMode.HTML,
-                message_thread_id=TOPIC_ID  # Posta no tópico "Novidades VOD"
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "❌ Ocorreu um erro ao processar sua mensagem. Por favor, tente novamente."
             )
-        else:
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=mensagem,
-                parse_mode=ParseMode.HTML,
-                message_thread_id=TOPIC_ID  # Posta no tópico "Novidades VOD"
-            )
-        
-        titulo = detalhes.get("title") or detalhes.get("name")
-        await query.edit_message_text(
-            f"✅ <b>{titulo}</b> foi postado no canal com sucesso! 🎉",
-            parse_mode=ParseMode.HTML
-        )
-        
-    except Exception as e:
-        logger.error(f"Erro ao postar no canal: {e}")
-        await query.edit_message_text(
-            f"❌ Erro ao postar no canal.\n\n"
-            f"Detalhes: {str(e)}"
-        )
+    except:
+        pass
 
 def main():
-    """Inicia o bot"""
+    """Inicia o bot com recuperação automática"""
     
-    # Verifica configurações
     if TELEGRAM_BOT_TOKEN == "SEU_TOKEN_DO_BOT_AQUI":
         print("❌ ERRO: Configure o TELEGRAM_BOT_TOKEN no arquivo!")
         print("Obtenha o token com @BotFather no Telegram")
@@ -458,25 +483,59 @@ def main():
     
     if not ADMIN_IDS:
         print("⚠️ AVISO: Lista ADMIN_IDS vazia. Qualquer pessoa poderá usar o bot!")
-        print("Adicione seu ID de usuário na lista ADMIN_IDS para restringir o acesso.")
     
-    # Cria aplicação
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Adiciona handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("adicionar", adicionar))
-    application.add_handler(CommandHandler("atualizar", atualizar))
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Inicia o bot
-    print("🤖 Bot iniciado! Aguardando comandos...")
-    print(f"📺 Canal configurado: {CHANNEL_ID}")
-    print(f"📌 Tópico: Novidades VOD (ID: {TOPIC_ID})")
-    print(f"🔑 TMDB API: Configurada")
-    print("\nPressione Ctrl+C para parar o bot.\n")
-    
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    while True:
+        try:
+            logger.info(f"🤖 Iniciando bot... [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+            
+            application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("adicionar", adicionar))
+            application.add_handler(CommandHandler("atualizar", atualizar))
+            application.add_handler(CallbackQueryHandler(button_callback))
+            
+            # Adiciona handler de erros
+            application.add_error_handler(error_handler)
+            
+            print("🤖 Bot iniciado! Aguardando comandos...")
+            print(f"📺 Canal configurado: {CHANNEL_ID}")
+            print(f"📌 Tópico: Novidades VOD (ID: {TOPIC_ID})")
+            print(f"🔑 TMDB API: Configurada")
+            print("\nPressione Ctrl+C para parar o bot.\n")
+            
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                pool_timeout=30,
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30
+            )
+            
+        except KeyboardInterrupt:
+            logger.info("🛑 Bot parado pelo usuário")
+            break
+            
+        except NetworkError as e:
+            logger.error(f"❌ Erro de rede: {e}")
+            logger.info("🔄 Reconectando em 10 segundos...")
+            time.sleep(10)
+            
+        except TimedOut as e:
+            logger.error(f"❌ Timeout: {e}")
+            logger.info("🔄 Reconectando em 10 segundos...")
+            time.sleep(10)
+            
+        except TelegramError as e:
+            logger.error(f"❌ Erro do Telegram: {e}")
+            logger.info("🔄 Reconectando em 15 segundos...")
+            time.sleep(15)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro inesperado: {e}")
+            logger.info("🔄 Reiniciando em 20 segundos...")
+            time.sleep(20)
 
 if __name__ == "__main__":
     main()

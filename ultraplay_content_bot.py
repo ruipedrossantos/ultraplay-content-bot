@@ -7,8 +7,14 @@ import logging
 from flask import Flask
 from threading import Thread
 import time
+import sys
 
-logging.basicConfig(level=logging.INFO)
+# Logging mais visível
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    stream=sys.stdout
+)
 logger = logging.getLogger(__name__)
 
 # CONFIGURAÇÕES
@@ -101,12 +107,14 @@ def formatar(d, tipo):
     return msg
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Comando /start de {u.effective_user.id}")
     if u.effective_user.id not in ADMINS:
         await u.message.reply_text("❌ Sem permissão")
         return
     await u.message.reply_text("🎬 <b>Bot UltraPlay</b>\n\n/adicionar <i>nome</i>", parse_mode=ParseMode.HTML)
 
 async def adicionar(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Comando /adicionar de {u.effective_user.id}")
     if u.effective_user.id not in ADMINS:
         await u.message.reply_text("❌ Sem permissão")
         return
@@ -179,30 +187,49 @@ async def callback(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"❌ {e}")
 
 def bot():
-    logger.info("BOT: Iniciando...")
-    a = Application.builder().token(TOKEN).build()
-    a.add_handler(CommandHandler("start", start))
-    a.add_handler(CommandHandler("adicionar", adicionar))
-    a.add_handler(CallbackQueryHandler(callback))
-    logger.info("BOT: Handlers OK")
-    logger.info("BOT: Polling...")
-    a.run_polling(drop_pending_updates=True)
-    logger.info("BOT: Rodando!")
+    try:
+        print("=" * 60)
+        print("🤖 INICIANDO BOT DO TELEGRAM")
+        print("=" * 60)
+        logger.info("Criando Application...")
+        
+        a = Application.builder().token(TOKEN).build()
+        logger.info("Application criado!")
+        
+        logger.info("Adicionando handlers...")
+        a.add_handler(CommandHandler("start", start))
+        a.add_handler(CommandHandler("adicionar", adicionar))
+        a.add_handler(CallbackQueryHandler(callback))
+        logger.info("Handlers adicionados!")
+        
+        logger.info("Iniciando polling...")
+        print("🚀 BOT PRONTO PARA RECEBER COMANDOS!")
+        print("=" * 60)
+        
+        a.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+        
+    except Exception as e:
+        print(f"❌ ERRO NO BOT: {e}")
+        logger.error(f"Erro no bot: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    logger.info("="*50)
-    logger.info("SISTEMA INICIANDO")
-    logger.info("="*50)
+    print("\n" + "=" * 60)
+    print("ULTRAPLAY BOT - INICIANDO SISTEMA")
+    print("=" * 60 + "\n")
     
-    # Bot
-    t = Thread(target=bot, daemon=True)
+    # Inicia bot em thread
+    print("📱 Iniciando thread do bot...")
+    t = Thread(target=bot, daemon=False)  # daemon=False para garantir que não morre
     t.start()
-    logger.info("Thread bot OK")
+    print("✅ Thread do bot iniciada!\n")
     
-    # Espera bot iniciar
-    time.sleep(5)
+    # Espera o bot iniciar
+    print("⏳ Aguardando 8 segundos para bot inicializar...")
+    time.sleep(8)
     
-    # Flask
+    # Inicia Flask
     port = int(os.environ.get("PORT", 10000))
-    logger.info(f"Flask porta {port}")
-    app.run(host="0.0.0.0", port=port)
+    print(f"\n🌐 Iniciando Flask na porta {port}...")
+    print("=" * 60 + "\n")
+    
+    app.run(host="0.0.0.0", port=port, use_reloader=False)

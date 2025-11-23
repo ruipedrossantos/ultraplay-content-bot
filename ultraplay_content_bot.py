@@ -4,6 +4,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
 import logging
+from threading import Thread
+from flask import Flask
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +19,17 @@ ADMIN_IDS = [7937632147]
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
+
+# Flask app para manter Render feliz
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 UltraPlay Bot está online!"
+
+@app.route('/health')
+def health():
+    return "OK"
 
 def buscar_conteudo(query: str):
     try:
@@ -197,14 +210,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"❌ Erro: {str(e)}")
 
-def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("adicionar", adicionar))
-    app.add_handler(CallbackQueryHandler(button_callback))
+def run_bot():
+    """Executa o bot do Telegram"""
+    bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("adicionar", adicionar))
+    bot_app.add_handler(CallbackQueryHandler(button_callback))
     
     logger.info("🤖 Bot iniciado!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    bot_app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()
+    # Inicia o bot em uma thread separada
+    bot_thread = Thread(target=run_bot)
+    bot_thread.start()
+    
+    # Inicia o servidor Flask na thread principal
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
